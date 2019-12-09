@@ -1,0 +1,12 @@
+config:
+  target: https://gatjk9gwc4.execute-api.ap-northeast-1.amazonaws.com/dev/
+  phases:
+    - duration: 60
+      arrivalRate: 1000
+  plugins:
+    cloudwatch:
+      namespace: "serverless-artillery-loadtest"
+scenarios:
+  - flow:
+      - get:
+          url: "/"
