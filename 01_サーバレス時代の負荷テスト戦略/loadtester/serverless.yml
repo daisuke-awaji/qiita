@@ -28,7 +28,7 @@ provider:
         - "*"
 functions:
   loadGenerator:
-    handler: handler.handler
+    handler: src/handler.handler
     timeout: 300
     environment:
       TOPIC_ARN:

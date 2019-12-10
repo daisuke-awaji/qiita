@@ -133,7 +133,9 @@ Complete report @ 2019-01-02T17:32:36.653Z
 
 Artillery だけでは単一のサーバ上から実行するため大量リクエストを生成できませんが、大量にリクエストを生成する方法があります。Artillery をサーバレスな実行環境に乗せてスケールさせる [serverless-artillery](https://github.com/Nordstrom/serverless-artillery) が公開されています。
 
-serverless framework を介してデプロイでき、低コストかつ短時間で大量リクエストを生成する負荷テスト環境を構築できます。
+同様のコンセプトを持ったツールに[Goad](https://goad.io/)があります。Goad は、Go で構築された AWS Lambda 搭載の高度に分散された負荷テストツールです。ここでは名前だけの紹介に留めます。
+
+serverless-artillery は Artillery を serverless framework を介してデプロイします。低コストかつ短時間で大量リクエストを生成する負荷テスト環境を構築できます。
 
 ### デプロイ
 
@@ -141,11 +143,15 @@ serverless framework を介してデプロイでき、低コストかつ短時�
 $ slsart deploy --stage dev
 ```
 
+![image.png](https://qiita-image-store.s3.ap-northeast-1.amazonaws.com/0/163591/c7c3970b-d264-0aa6-04d7-703f47413400.png)
+
 ### 実行
 
 ```
 $ slsart invoke --stage dev
 ```
+
+![image.png](https://qiita-image-store.s3.ap-northeast-1.amazonaws.com/0/163591/5b8fc9e7-2fc3-6364-a198-88f6bed0d58f.png)
 
 ### 片付け
 
@@ -155,12 +161,18 @@ $ slsart remove
 
 # プラグインの追加
 
+## artillery-plugin-cloudwatch
+
 artillery-plugin-cloudwatch を追加することで、テスト結果を AWS CloudWatch に記録できます。
 他にも DataDog 用のプラグインなどが用意されています。
+
+![image.png](https://qiita-image-store.s3.ap-northeast-1.amazonaws.com/0/163591/9e679bb6-ad5a-e44d-8633-34ac95aca488.png)
 
 ```
 $ npm install --save artillery-plugin-cloudwatch
 ```
+
+以下に serverless.yml の一部を抜粋する。
 
 ```
 service: serverless-artillery
@@ -193,4 +205,113 @@ provider:
         - "*"
 ```
 
-# CircleCI から実行する
+# 継続的に負荷テストをするという考え方
+
+## CircleCI から実行する
+
+## 負荷にランダム性を持たせる
+
+CircleCI から継続的に負荷テストを実行できるようになったので開発フェーズにおいて常にある程度の負荷をかけ続けることができるようになりました。通常のバックグラウンド負荷レベルをシミュレートするドリップテストが継続的に実行できていますが、ある程度ユーザリクエストにゆらぎ（ランダム性）を持たせておくとより多くのケースをテストできます。つまり、`phases` の項目を動的に変更してみましょう。
+
+```
+config:
+  target: https://gatjk9gwc4.execute-api.ap-northeast-1.amazonaws.com/dev/
+  phases:
+    - duration: 10              # この部分を
+      arrivalRate: 1000000      # ランダムに変化させる
+scenarios:
+  - flow:
+      - get:
+          url: "/"
+```
+
+シナリオをランダムに変更する簡単なツールを作成します。
+
+```generateSenario.js
+function rand(min, max) {
+  min = Math.ceil(min);
+  max = Math.floor(max);
+  return Math.floor(Math.random() * (max - min)) + min; //The maximum is exclusive and the minimum is inclusive
+}
+
+function generatePhases(phases, duration, arrivalRate) {
+  const generatedPhases = [];
+  for (let i = 0; i < rand(phases.min, phases.max); i++) {
+    generatedPhases.push({
+      duration: rand(duration.min, duration.max),
+      arrivalRate: rand(arrivalRate.min, arrivalRate.max)
+    });
+  }
+  return generatedPhases;
+}
+
+function generateScript() {
+  fs = require("fs");
+  yaml = require("js-yaml");
+  const script = yaml.safeLoad(fs.readFileSync("./script.yml", "utf-8"));
+  const phases = {
+    min: 1,
+    max: 50
+  };
+  const duration = {
+    min: 10,
+    max: 100
+  };
+  const arrivalRate = {
+    min: 10,
+    max: 10000
+  };
+  script.config.phases = generatePhases(phases, duration, arrivalRate);
+  fs.writeFileSync("./converted.yml", yaml.safeDump(script));
+}
+
+generateScript();
+```
+
+シンプルに node コマンドで実行しても良いですが、以下のように npm スクリプトで実行できるようにしておくと CircleCI の設定を記述する際に見通しがよくなります。
+
+```
+$ node generateSenario.js
+```
+
+```
+$ npm run generate:senario
+```
+
+実行結果は以下のようになります。このようにしてランダムに生成された `script.yml` を CI から実行します。今回のサンプルソースではスパイクがかかるようなケースを生成しませんでした。ランダムに生成する値をうまく調整することで、通常時の負荷を想定したドリップテストとスパイクアクセスを想定したスラムテストを同時に継続的に実行できます。
+
+```
+config:
+  target: 'https://gatjk9gwc4.execute-api.ap-northeast-1.amazonaws.com/dev/'
+  phases:
+    - duration: 78
+      arrivalRate: 6184
+    - duration: 94
+      arrivalRate: 4583
+    - duration: 73
+      arrivalRate: 6991
+    - duration: 82
+      arrivalRate: 2664
+    - duration: 92
+      arrivalRate: 5239
+    - duration: 33
+      arrivalRate: 1596
+    - duration: 51
+      arrivalRate: 9621
+    - duration: 94
+      arrivalRate: 4155
+    - duration: 51
+      arrivalRate: 3145
+    - duration: 36
+      arrivalRate: 802
+    - duration: 90
+      arrivalRate: 6286
+    - duration: 46
+      arrivalRate: 5219
+    - duration: 29
+      arrivalRate: 8020
+scenarios:
+  - flow:
+      - get:
+          url: /
+```
